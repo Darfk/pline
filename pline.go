@@ -28,6 +28,7 @@ type Line struct {
 	waiting  chan bool
 	cancel   chan struct{}
 	done     chan struct{}
+	shrink   int
 }
 
 func (line *Line) main() {
@@ -96,11 +97,19 @@ func (line *Line) main() {
 				}(kind, list[line.index[kind]])
 			}
 		}
+
+		for kind, _ := range line.tasks {
+			if line.index[kind] >= line.shrink {
+				line.tasks[kind] = line.tasks[kind][line.shrink:]
+				line.index[kind] -= line.shrink
+			}
+		}
+
 	}
 	close(line.done)
 }
 
-func NewLine( /*config Config*/ ) (line *Line) {
+func NewLine() (line *Line) {
 	line = &Line{
 		tasks:    make(map[int][]Task),
 		idle:     make(map[int]int),
@@ -112,6 +121,7 @@ func NewLine( /*config Config*/ ) (line *Line) {
 		waiting:  make(chan bool),
 		cancel:   make(chan struct{}),
 		done:     make(chan struct{}),
+		shrink:   128,
 	}
 
 	return
