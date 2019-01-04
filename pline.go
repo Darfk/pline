@@ -26,24 +26,52 @@ type Line struct {
 	complete chan completion
 	hire     chan hire
 	waiting  chan bool
-	cancel   chan struct{}
+	cancel   chan bool
 	done     chan struct{}
 	shrink   int
 }
 
+func NewLine() (line *Line) {
+	line = &Line{
+		tasks:    make(map[int][]Task),
+		idle:     make(map[int]int),
+		index:    make(map[int]int),
+		workers:  make(map[int]int),
+		input:    make(chan []Task),
+		complete: make(chan completion),
+		hire:     make(chan hire),
+		waiting:  make(chan bool),
+		cancel:   make(chan bool),
+		done:     make(chan struct{}),
+		shrink:   128,
+	}
+
+	return
+}
+
 func (line *Line) main() {
 	var (
-		waiting bool = false
-		empty   bool
-		idle    bool
+		cancelled bool = false
+		waiting   bool = false
+		ignorant  bool = false
+		empty     bool
+		idle      bool
 	)
 
 	for {
 		select {
-		case <-line.cancel:
-			break
+		case graceful := <-line.cancel:
+			if graceful {
+				waiting = true
+				ignorant = true
+			} else {
+				cancelled = true
+			}
 		case waiting = <-line.waiting:
 		case hire := <-line.hire:
+			if ignorant {
+				break
+			}
 			if _, exists := line.workers[hire.kind]; exists {
 				line.workers[hire.kind] += hire.count
 				line.idle[hire.kind] += hire.count
@@ -53,16 +81,26 @@ func (line *Line) main() {
 				line.index[hire.kind] = 0
 			}
 		case tasks := <-line.input:
+			if ignorant {
+				break
+			}
 			for _, task := range tasks {
 				kind := task.Kind()
 				line.tasks[kind] = append(line.tasks[kind], task)
 			}
 		case completion := <-line.complete:
 			line.idle[completion.kind]++
+			if ignorant {
+				break
+			}
 			for _, task := range completion.tasks {
 				kind := task.Kind()
 				line.tasks[kind] = append(line.tasks[kind], task)
 			}
+		}
+
+		if cancelled {
+			break
 		}
 
 		if waiting {
@@ -109,34 +147,26 @@ func (line *Line) main() {
 	close(line.done)
 }
 
-func NewLine() (line *Line) {
-	line = &Line{
-		tasks:    make(map[int][]Task),
-		idle:     make(map[int]int),
-		index:    make(map[int]int),
-		workers:  make(map[int]int),
-		input:    make(chan []Task),
-		complete: make(chan completion),
-		hire:     make(chan hire),
-		waiting:  make(chan bool),
-		cancel:   make(chan struct{}),
-		done:     make(chan struct{}),
-		shrink:   128,
-	}
-
-	return
-}
-
 func (line *Line) Start() {
 	go line.main()
 }
 
-func (line *Line) Push(tasks []Task) {
+func (line *Line) Push(tasks ...Task) {
 	line.input <- tasks
 }
 
 func (line *Line) Wait() {
 	line.waiting <- true
+	<-line.done
+}
+
+func (line *Line) Finish() {
+	line.cancel <- true
+	<-line.done
+}
+
+func (line *Line) Cancel() {
+	line.cancel <- false
 	<-line.done
 }
 
