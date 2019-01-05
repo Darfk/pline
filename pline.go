@@ -69,9 +69,6 @@ func (line *Line) main() {
 			}
 		case waiting = <-line.waiting:
 		case hire := <-line.hire:
-			if ignorant {
-				break
-			}
 			if _, exists := line.workers[hire.kind]; exists {
 				line.workers[hire.kind] += hire.count
 				line.idle[hire.kind] += hire.count
@@ -103,25 +100,24 @@ func (line *Line) main() {
 			break
 		}
 
-		if waiting {
-			idle = true
-			for kind, _ := range line.workers {
-				if line.workers[kind] != line.idle[kind] {
-					idle = false
-					break
-				}
-			}
-			empty = true
-			for kind, list := range line.tasks {
-				if len(list)-line.index[kind] > 0 {
-					empty = false
-					break
-				}
-			}
-
-			if idle && empty {
+		idle = true
+		for kind, _ := range line.workers {
+			if line.workers[kind] != line.idle[kind] {
+				idle = false
 				break
 			}
+		}
+
+		empty = true
+		for kind, list := range line.tasks {
+			if len(list)-line.index[kind] > 0 {
+				empty = false
+				break
+			}
+		}
+
+		if waiting && idle && empty {
+			break
 		}
 
 		for kind, list := range line.tasks {
@@ -151,6 +147,10 @@ func (line *Line) Start() {
 	go line.main()
 }
 
+func (line *Line) Hire(kind int, count int) {
+	line.hire <- hire{kind, count}
+}
+
 func (line *Line) Push(tasks ...Task) {
 	line.input <- tasks
 }
@@ -168,8 +168,4 @@ func (line *Line) Finish() {
 func (line *Line) Cancel() {
 	line.cancel <- false
 	<-line.done
-}
-
-func (line *Line) Hire(kind int, count int) {
-	line.hire <- hire{kind, count}
 }
