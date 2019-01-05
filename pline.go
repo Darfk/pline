@@ -17,6 +17,7 @@ type completion struct {
 	kind  int
 }
 
+// A Line describes a production line
 type Line struct {
 	tasks    map[int][]Task
 	idle     map[int]int
@@ -31,6 +32,8 @@ type Line struct {
 	shrink   int
 }
 
+// Creates a new production line, the returned line needs to be started before
+// it can be used.
 func NewLine() (line *Line) {
 	line = &Line{
 		tasks:    make(map[int][]Task),
@@ -143,28 +146,44 @@ func (line *Line) main() {
 	close(line.done)
 }
 
+// Starts the production line, the production line is now able
+// to process requests to hire workers, push tasks, etc.
 func (line *Line) Start() {
 	go line.main()
 }
 
+// Hire increases the number of workers by count
+// The kind of tasks the workers work on is specified by kind
+// If count < 0, the number of workers are decremented
 func (line *Line) Hire(kind int, count int) {
 	line.hire <- hire{kind, count}
 }
 
+// Push tasks into the production line.
+// Tasks are placed into the list respective of their kind.
 func (line *Line) Push(tasks ...Task) {
 	line.input <- tasks
 }
 
+// Wait blocks until the production line has no more tasks to complete
+// and all workers are idle.
+// The production line is still able to hire new workers.
 func (line *Line) Wait() {
 	line.waiting <- true
 	<-line.done
 }
 
+// Finish is the same as Wait except that the production line is
+// set to ignore all tasks placed into it either from the result of
+// complete tasks or via use of Push.
+// The production line is still able to hire new workers.
 func (line *Line) Finish() {
 	line.cancel <- true
 	<-line.done
 }
 
+// Cancel immediately ends the production line and returns,
+// further calls to the production line will block forever.
 func (line *Line) Cancel() {
 	line.cancel <- false
 	<-line.done
