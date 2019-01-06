@@ -17,6 +17,28 @@ type completion struct {
 	kind  int
 }
 
+// Reports contain information about a production line at the time of capture
+// The key of each map represents kind
+type Report struct {
+	// Number of workers working on the production line
+	Workers map[int]int
+
+	// Number of idle workers on the production line
+	Idle map[int]int
+
+	// Size of each task list in the production line
+	Tasks map[int]int
+
+	// The index of the next task to be undertaken
+	Index map[int]int
+
+	// Waiting is true if the production line is waiting to close
+	Waiting bool
+
+	// Ignorant is true if the production line is not accepting new tasks
+	Ignorant bool
+}
+
 // A Line describes a production line
 type Line struct {
 	tasks    map[int][]Task
@@ -26,6 +48,7 @@ type Line struct {
 	input    chan []Task
 	complete chan completion
 	hire     chan hire
+	report   chan *Report
 	waiting  chan bool
 	cancel   chan bool
 	done     chan struct{}
@@ -43,6 +66,7 @@ func NewLine() (line *Line) {
 		input:    make(chan []Task),
 		complete: make(chan completion),
 		hire:     make(chan hire),
+		report:   make(chan *Report),
 		waiting:  make(chan bool),
 		cancel:   make(chan bool),
 		done:     make(chan struct{}),
@@ -71,6 +95,22 @@ func (line *Line) main() {
 				cancelled = true
 			}
 		case waiting = <-line.waiting:
+		case report := <-line.report:
+			for kind, value := range line.workers {
+				report.Workers[kind] = value
+			}
+			for kind, value := range line.idle {
+				report.Idle[kind] = value
+			}
+			for kind, _ := range line.tasks {
+				report.Tasks[kind] = len(line.tasks[kind])
+			}
+			for kind, value := range line.index {
+				report.Index[kind] = value
+			}
+			report.Waiting = waiting
+			report.Ignorant = ignorant
+			line.report <- report
 		case hire := <-line.hire:
 			if _, exists := line.workers[hire.kind]; exists {
 				line.workers[hire.kind] += hire.count
@@ -187,4 +227,19 @@ func (line *Line) Finish() {
 func (line *Line) Cancel() {
 	line.cancel <- false
 	<-line.done
+}
+
+// Report captures information about a production line and returns a reference to a Report.
+func (line *Line) Report() (r *Report) {
+	r = &Report{
+		Workers:  make(map[int]int),
+		Idle:     make(map[int]int),
+		Tasks:    make(map[int]int),
+		Index:    make(map[int]int),
+		Waiting:  false,
+		Ignorant: false,
+	}
+
+	line.report <- r
+	return <-line.report
 }
