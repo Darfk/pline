@@ -1,148 +1,173 @@
 package pline
 
 import (
-	"sync"
 	"context"
 )
 
-var defaultWaitGroup *sync.WaitGroup
+// var defaultWaitGroup *sync.WaitGroup
 
 type Task interface {
 	Run(context.Context)
 }
 
 type hire struct {
+	group *Group
 	count int
 }
 
-type completion struct{}
+type completion struct {
+	group *Group
+}
 
-// A Line describes a production line
+type Result struct {
+	load    int
+	workers int
+}
+
+type input struct {
+	group *Group
+	task  Task
+}
+
+// A Line describes a production line full of workers
 type Line struct {
-	tasks    []Task
-	idle     int
-	index    int
-	workers  int
-	input    chan Task
+	input    chan input
+	result   chan Result
 	complete chan completion
 	hire     chan hire
-	waiting  chan bool
-	cancel   chan bool
-	done     chan struct{}
-	wg       *sync.WaitGroup
+	wait     chan bool
+	ctx      context.Context
+	cancel   context.CancelFunc
+	load     int
+	waiting  bool
+	ignorant bool
 }
 
 // Creates a new production line, the returned line needs to be started before
 // it can be used.
 func NewLine() (line *Line) {
 	line = &Line{
-		input:    make(chan Task),
+		input:    make(chan input),
+		result:   make(chan Result),
 		complete: make(chan completion),
 		hire:     make(chan hire),
-		waiting:  make(chan bool),
-		cancel:   make(chan bool),
-		done:     make(chan struct{}),
+		wait:     make(chan bool),
+		waiting:  false,
+		load:     0,
 	}
-
-	if defaultWaitGroup == nil {
-		defaultWaitGroup = &sync.WaitGroup{}
-	}
-
-	line.wg = defaultWaitGroup
 
 	return
 }
 
-func NewLineWithWaitGroup(wg *sync.WaitGroup) (line *Line) {
-	line = NewLine()
-	line.wg = wg
+type Group struct {
+	line    *Line
+	tasks   []Task
+	idle    int
+	workers int
+}
+
+func (line *Line) NewGroup(workers int) (group *Group) {
+	group = &Group{
+		workers: workers,
+		idle:    workers,
+		line:    line,
+	}
+
 	return
 }
 
-// TODO: use package context
-func (line *Line) main(ctx context.Context) {
-	var (
-		cancelled bool = false
-		ignorant  bool = false
-		idle      int
-	)
+func (line *Line) main() {
+	line.ctx, line.cancel = context.WithCancel(line.ctx)
 
 	for {
+		var group *Group = nil
+
 		select {
-		case graceful := <-line.cancel:
-			if graceful {
-				ignorant = true
-			} else {
-				cancelled = true
-			}
-		// case waiting = <-line.waiting:
+		case <-line.ctx.Done():
+			return
+		case ignorant := <-line.wait:
+			line.waiting = true
+			line.ignorant = ignorant
 		case hire := <-line.hire:
-			idle += hire.count
-		case task := <-line.input:
-			if ignorant {
-				break
+			group = hire.group
+			group.idle += hire.count
+			line.result <- Result{}
+		case input := <-line.input:
+			group = input.group
+			if !line.ignorant {
+				line.load++
+				group.tasks = append(group.tasks, input.task)
 			}
-			line.tasks = append(line.tasks, task)
-			line.wg.Add(1)
-		case _ = <-line.complete:
-			idle++
-			line.wg.Done()
+			line.result <- Result{}
+		case completion := <-line.complete:
+			group = completion.group
+			line.load--
+			group.idle++
 		}
 
-		if cancelled {
-			break
+		if group != nil {
+			for group.idle > 0 && len(group.tasks) > 0 {
+				group.idle--
+				go func(task Task, group *Group) {
+					task.Run(line.ctx)
+					line.complete <- completion{group: group}
+				}(group.tasks[0], group)
+				group.tasks = group.tasks[1:]
+			}
 		}
 
-		for idle > 0 && len(line.tasks) > 0 {
-			idle--
-			go func(task Task) {
-				task.Run(ctx)
-				line.complete <- completion{}
-			}(line.tasks[0])
-			line.tasks = line.tasks[1:]
+		if line.load == 0 && line.waiting {
+			line.cancel()
 		}
 	}
-	close(line.done)
+}
+
+// Push a task into this group.
+// This function returns when the new task has been added and accounted for.
+func (group *Group) Push(task Task) Result {
+	group.line.input <- input{group: group, task: task}
+	return <-group.line.result
 }
 
 // Starts the production line, the production line is now able
 // to process requests to hire workers, push tasks, etc.
 func (line *Line) Start(ctx context.Context) {
-	go line.main(ctx)
+	line.ctx = ctx
+	go line.main()
 }
 
 // Hire increases the number of workers by count
 // The kind of tasks the workers work on is specified by kind
 // If count < 0, the number of workers are decremented
-func (line *Line) Hire(count int) {
-	line.hire <- hire{count}
+func (group *Group) Hire(count int) Result {
+	group.line.hire <- hire{group: group, count: count}
+	return <-group.line.result
 }
 
-// Push tasks into this production line.
-func (line *Line) Push(tasks Task) {
-	line.input <- tasks
-}
+// // Push tasks into this production line.
+// func (line *Line) Push(tasks Task) Result {
+// 	line.input <- tasks
+// 	return <-line.result
+// }
 
 // Wait blocks until the production line has no more tasks to complete
 // and all workers are idle.
 // The production line is still able to hire new workers.
 func (line *Line) Wait() {
-	// line.waiting <- true
-	line.wg.Wait()
+	line.wait <- false
+	<-line.ctx.Done()
 }
 
 // Finish is the same as Wait except that the production line is
-// set to ignore all tasks placed into it either from the result of
-// complete tasks or via use of Push.
+// set to ignore all tasks placed into it via Push.
 // The production line is still able to hire new workers.
 func (line *Line) Finish() {
-	line.cancel <- true
-	<-line.done
+	line.wait <- true
+	<-line.ctx.Done()
 }
 
 // Cancel immediately ends the production line and returns,
 // further calls to the production line will block forever.
 func (line *Line) Cancel() {
-	line.cancel <- false
-	<-line.done
+	line.cancel()
 }
