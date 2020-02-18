@@ -144,12 +144,6 @@ func (group *Group) Hire(count int) Result {
 	return <-group.line.result
 }
 
-// // Push tasks into this production line.
-// func (line *Line) Push(tasks Task) Result {
-// 	line.input <- tasks
-// 	return <-line.result
-// }
-
 // Wait blocks until the production line has no more tasks to complete
 // and all workers are idle.
 // The production line is still able to hire new workers.
