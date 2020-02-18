@@ -1,9 +1,9 @@
 package pline
 
 import (
-	"testing"
 	"context"
 	"fmt"
+	"testing"
 )
 
 var (
@@ -35,6 +35,30 @@ func TestPline(t *testing.T) {
 	line.Start(ctx)
 	group1.Push(&TestPlineTask{n: 1, t: t})
 	line.Wait()
+}
+
+func TestWalk(t *testing.T) {
+	ctx := context.Background()
+
+	line := NewLine()
+
+	group1 = line.NewGroup(0)
+
+	line.Start(ctx)
+
+	group1.Push(&TestPlineTask{n: 1, t: t})
+	group1.Push(&TestPlineTask{n: 1, t: t})
+	group1.Push(&TestPlineTask{n: 1, t: t})
+	group1.Push(&TestPlineTask{n: 1, t: t})
+
+	t.Log(group1.WalkTasks(func(i int, task Task) {
+		t := task.(*TestPlineTask)
+		t.t.Log(t.n)
+	}))
+
+	t.Log(group1.Hire(1))
+
+	line.Finish()
 }
 
 type CancellableTask struct {

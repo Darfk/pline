@@ -4,8 +4,6 @@ import (
 	"context"
 )
 
-// var defaultWaitGroup *sync.WaitGroup
-
 type Task interface {
 	Run(context.Context)
 }
@@ -24,6 +22,10 @@ type Result struct {
 	workers int
 }
 
+type lock struct {
+	group *Group
+}
+
 type input struct {
 	group *Group
 	task  Task
@@ -36,6 +38,7 @@ type Line struct {
 	complete chan completion
 	hire     chan hire
 	wait     chan bool
+	lock     chan lock
 	ctx      context.Context
 	cancel   context.CancelFunc
 	load     int
@@ -52,6 +55,7 @@ func NewLine() (line *Line) {
 		complete: make(chan completion),
 		hire:     make(chan hire),
 		wait:     make(chan bool),
+		lock:     make(chan lock),
 		waiting:  false,
 		load:     0,
 	}
@@ -91,14 +95,26 @@ func (line *Line) main() {
 		case hire := <-line.hire:
 			group = hire.group
 			group.idle += hire.count
-			line.result <- Result{}
+			line.result <- Result{
+				workers: group.workers,
+				load:    len(group.tasks),
+			}
+		case lock := <-line.lock:
+			group = lock.group
+			line.result <- Result{
+				workers: lock.group.workers,
+				load:    len(group.tasks),
+			}
 		case input := <-line.input:
 			group = input.group
 			if !line.ignorant {
 				line.load++
 				group.tasks = append(group.tasks, input.task)
 			}
-			line.result <- Result{}
+			line.result <- Result{
+				workers: group.workers,
+				load:    len(group.tasks),
+			}
 		case completion := <-line.complete:
 			group = completion.group
 			line.load--
@@ -126,6 +142,15 @@ func (line *Line) main() {
 // This function returns when the new task has been added and accounted for.
 func (group *Group) Push(task Task) Result {
 	group.line.input <- input{group: group, task: task}
+	return <-group.line.result
+}
+
+// Walk through the group's tasks calling fn for each task
+func (group *Group) WalkTasks(fn func(int, Task)) Result {
+	group.line.lock <- lock{group: group}
+	for i, task := range group.tasks {
+		fn(i, task)
+	}
 	return <-group.line.result
 }
 
