@@ -1,232 +1,194 @@
 package pline
 
-import ()
+import (
+	"context"
+)
 
 type Task interface {
-	Kind() int
-	Do() []Task
+	Run(context.Context)
 }
 
 type hire struct {
-	kind  int
+	group *Group
 	count int
 }
 
 type completion struct {
-	tasks []Task
-	kind  int
+	group *Group
 }
 
-// Reports contain information about a production line at the time of capture
-// The key of each map represents kind
-type Report struct {
-	// Number of workers working on the production line
-	Workers map[int]int
-
-	// Number of idle workers on the production line
-	Idle map[int]int
-
-	// Size of each task list in the production line
-	Tasks map[int]int
-
-	// The index of the next task to be undertaken
-	Index map[int]int
-
-	// Waiting is true if the production line is waiting to close
-	Waiting bool
-
-	// Ignorant is true if the production line is not accepting new tasks
-	Ignorant bool
+type Result struct {
+	load    int
+	workers int
 }
 
-// A Line describes a production line
+type lock struct {
+	group *Group
+}
+
+type input struct {
+	group *Group
+	task  Task
+}
+
+// A Line describes a production line full of workers
 type Line struct {
-	tasks    map[int][]Task
-	idle     map[int]int
-	index    map[int]int
-	workers  map[int]int
-	input    chan []Task
+	input    chan input
+	result   chan Result
 	complete chan completion
 	hire     chan hire
-	report   chan *Report
-	waiting  chan bool
-	cancel   chan bool
-	done     chan struct{}
-	shrink   int
+	wait     chan bool
+	lock     chan lock
+	ctx      context.Context
+	cancel   context.CancelFunc
+	load     int
+	waiting  bool
+	ignorant bool
 }
 
 // Creates a new production line, the returned line needs to be started before
 // it can be used.
 func NewLine() (line *Line) {
 	line = &Line{
-		tasks:    make(map[int][]Task),
-		idle:     make(map[int]int),
-		index:    make(map[int]int),
-		workers:  make(map[int]int),
-		input:    make(chan []Task),
+		input:    make(chan input),
+		result:   make(chan Result),
 		complete: make(chan completion),
 		hire:     make(chan hire),
-		report:   make(chan *Report),
-		waiting:  make(chan bool),
-		cancel:   make(chan bool),
-		done:     make(chan struct{}),
-		shrink:   128,
+		wait:     make(chan bool),
+		lock:     make(chan lock),
+		waiting:  false,
+		load:     0,
+	}
+
+	return
+}
+
+type Group struct {
+	line    *Line
+	tasks   []Task
+	idle    int
+	workers int
+}
+
+func (line *Line) NewGroup(workers int) (group *Group) {
+	group = &Group{
+		workers: workers,
+		idle:    workers,
+		line:    line,
 	}
 
 	return
 }
 
 func (line *Line) main() {
-	var (
-		cancelled bool = false
-		waiting   bool = false
-		ignorant  bool = false
-		empty     bool
-		idle      bool
-	)
+	line.ctx, line.cancel = context.WithCancel(line.ctx)
 
 	for {
+		var group *Group = nil
+
 		select {
-		case graceful := <-line.cancel:
-			if graceful {
-				waiting = true
-				ignorant = true
-			} else {
-				cancelled = true
-			}
-		case waiting = <-line.waiting:
-		case report := <-line.report:
-			for kind, value := range line.workers {
-				report.Workers[kind] = value
-			}
-			for kind, value := range line.idle {
-				report.Idle[kind] = value
-			}
-			for kind, _ := range line.tasks {
-				report.Tasks[kind] = len(line.tasks[kind])
-			}
-			for kind, value := range line.index {
-				report.Index[kind] = value
-			}
-			report.Waiting = waiting
-			report.Ignorant = ignorant
-			line.report <- report
+		case <-line.ctx.Done():
+			return
+		case ignorant := <-line.wait:
+			line.waiting = true
+			line.ignorant = ignorant
 		case hire := <-line.hire:
-			if _, exists := line.workers[hire.kind]; exists {
-				line.workers[hire.kind] += hire.count
-				line.idle[hire.kind] += hire.count
-			} else {
-				line.workers[hire.kind] = hire.count
-				line.idle[hire.kind] = hire.count
-				line.index[hire.kind] = 0
+			group = hire.group
+			group.idle += hire.count
+			line.result <- Result{
+				workers: group.workers,
+				load:    len(group.tasks),
 			}
-		case tasks := <-line.input:
-			if ignorant {
-				break
+		case lock := <-line.lock:
+			group = lock.group
+			line.result <- Result{
+				workers: lock.group.workers,
+				load:    len(group.tasks),
 			}
-			for _, task := range tasks {
-				kind := task.Kind()
-				line.tasks[kind] = append(line.tasks[kind], task)
+		case input := <-line.input:
+			group = input.group
+			if !line.ignorant {
+				line.load++
+				group.tasks = append(group.tasks, input.task)
+			}
+			line.result <- Result{
+				workers: group.workers,
+				load:    len(group.tasks),
 			}
 		case completion := <-line.complete:
-			line.idle[completion.kind]++
-			if ignorant {
-				break
-			}
-			for _, task := range completion.tasks {
-				kind := task.Kind()
-				line.tasks[kind] = append(line.tasks[kind], task)
-			}
+			group = completion.group
+			line.load--
+			group.idle++
 		}
 
-		if cancelled {
-			break
-		}
-
-		idle = true
-		for kind, _ := range line.workers {
-			if line.workers[kind] != line.idle[kind] {
-				idle = false
-				break
+		if group != nil {
+			for group.idle > 0 && len(group.tasks) > 0 {
+				group.idle--
+				go func(task Task, group *Group) {
+					task.Run(line.ctx)
+					line.complete <- completion{group: group}
+				}(group.tasks[0], group)
+				group.tasks = group.tasks[1:]
 			}
 		}
 
-		empty = true
-		for kind, list := range line.tasks {
-			if len(list)-line.index[kind] > 0 {
-				empty = false
-				break
-			}
+		if line.load == 0 && line.waiting {
+			line.cancel()
 		}
-
-		if waiting && idle && empty {
-			break
-		}
-
-		for kind, list := range line.tasks {
-			for ; line.idle[kind] > 0 && line.index[kind] < len(list); line.index[kind]++ {
-				line.idle[kind]--
-				go func(kind int, task Task) {
-					line.complete <- completion{
-						kind:  kind,
-						tasks: task.Do(),
-					}
-				}(kind, list[line.index[kind]])
-			}
-		}
-
-		for kind, _ := range line.tasks {
-			if line.index[kind] >= line.shrink {
-				line.tasks[kind] = line.tasks[kind][line.shrink:]
-				line.index[kind] -= line.shrink
-			}
-		}
-
 	}
-	close(line.done)
+}
+
+// Push a task into this group.
+// This function returns when the new task has been added and accounted for.
+func (group *Group) Push(task Task) Result {
+	group.line.input <- input{group: group, task: task}
+	return <-group.line.result
+}
+
+// Walk through the group's tasks calling fn for each task
+func (group *Group) WalkTasks(fn func(int, Task)) Result {
+	group.line.lock <- lock{group: group}
+	for i, task := range group.tasks {
+		fn(i, task)
+	}
+	return <-group.line.result
 }
 
 // Starts the production line, the production line is now able
 // to process requests to hire workers, push tasks, etc.
-func (line *Line) Start() {
+func (line *Line) Start(ctx context.Context) {
+	line.ctx = ctx
 	go line.main()
 }
 
 // Hire increases the number of workers by count
 // The kind of tasks the workers work on is specified by kind
 // If count < 0, the number of workers are decremented
-func (line *Line) Hire(kind int, count int) {
-	line.hire <- hire{kind, count}
-}
-
-// Push tasks into the production line.
-// Tasks are placed into the list respective of their kind.
-func (line *Line) Push(tasks ...Task) {
-	line.input <- tasks
+func (group *Group) Hire(count int) Result {
+	group.line.hire <- hire{group: group, count: count}
+	return <-group.line.result
 }
 
 // Wait blocks until the production line has no more tasks to complete
 // and all workers are idle.
 // The production line is still able to hire new workers.
 func (line *Line) Wait() {
-	line.waiting <- true
-	<-line.done
+	line.wait <- false
+	<-line.ctx.Done()
 }
 
 // Finish is the same as Wait except that the production line is
-// set to ignore all tasks placed into it either from the result of
-// complete tasks or via use of Push.
+// set to ignore all tasks placed into it via Push.
 // The production line is still able to hire new workers.
 func (line *Line) Finish() {
-	line.cancel <- true
-	<-line.done
+	line.wait <- true
+	<-line.ctx.Done()
 }
 
 // Cancel immediately ends the production line and returns,
 // further calls to the production line will block forever.
 func (line *Line) Cancel() {
-	line.cancel <- false
-	<-line.done
+	line.cancel()
 }
 
 // Report captures information about a production line and returns a reference to a Report.

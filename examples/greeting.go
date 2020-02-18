@@ -2,69 +2,88 @@ package main
 
 import (
 	pline ".."
+	"log"
 	"time"
+	"context"
+	"fmt"
 )
 
-const (
-	TaskGreet = iota
-	TaskPrint
+var (
+	line *pline.Line
+	printGroup *pline.Group
+	greetGroup *pline.Group
 )
 
 type GreetTask struct {
 	name string
 }
 
-func (t *GreetTask) Kind() int { return TaskGreet }
-func (t *GreetTask) Do() []pline.Task {
+func (t *GreetTask) String() string {
+	return fmt.Sprintf("greet task for: %s", t.name)
+}
+
+func (t *GreetTask) Run(ctx context.Context) {
+	log.Println("greet task:", t.name)
+
+	time.Sleep(time.Millisecond * 250)
+
 	if t.name == "Andy" || t.name == "Nathan" {
 		// say hi to our friends
-		return []pline.Task{&PrintTask{"Hey " + t.name + "!"}}
+		printGroup.Push(&PrintTask{"Hey " + t.name + "!"})
+		return
 	} else if t.name == "Kirk" {
 		// give Kirk the cold shoulder
-		return nil
+		return
+	} else if t.name == "Tim" {
+		// Tim ruins it for everyone
+		return
 	}
 	// we haven't met them before
-	return []pline.Task{
-		&PrintTask{"Hi " + t.name},
-		&PrintTask{"Welcome to pline " + t.name + "."},
-	}
+
+	printGroup.Push(&PrintTask{"Hi " + t.name})
+	printGroup.Push(&PrintTask{"Welcome to pline " + t.name + "."})
 }
 
 type PrintTask struct {
 	text string
 }
 
-func (t *PrintTask) Kind() int { return TaskPrint }
-func (t *PrintTask) Do() []pline.Task {
+func (t *PrintTask) String() string {
+	return fmt.Sprintf("print task for: %s", t.text)
+}
+
+func (t *PrintTask) Run(ctx context.Context) {
 	// printing takes a while, we will use a worker pool
 	time.Sleep(time.Millisecond * 250)
-	println(t.text)
-	return nil
+	log.Println("print task:", t.text)
+	return
 }
 
 func main() {
-	line := pline.NewLine()
+	// create the production lines
+	line = pline.NewLine()
+
+	greetGroup = line.NewGroup(1)
+	printGroup = line.NewGroup(8)
+
+	ctx := context.Background()
 
 	// start the line so that it can accept tasks
-	line.Start()
+	line.Start(ctx)
 
-	// push all the tasks into the production line
-	line.Push([]pline.Task{
-		&PrintTask{"This is pline"},
-		&GreetTask{"Andy"},
-		&GreetTask{"Nathan"},
-		&GreetTask{"Kirk"},
-		&GreetTask{"Rebecca"},
-		&GreetTask{"Miles"},
-		&GreetTask{"Emily"},
-		&GreetTask{"Steven"},
-	})
+	// push all the print tasks into the production line
+	printGroup.Push(&PrintTask{"This is pline"})
 
-	// hire a worker to create greetings
-	line.Hire(TaskGreet, 1)
-
-	// hire some workers to print the greetings
-	line.Hire(TaskPrint, 8)
+	// push all the greet tasks into the production line
+	greetGroup.Push(&GreetTask{"Andy"})
+	greetGroup.Push(&GreetTask{"Nathan"})
+	greetGroup.Push(&GreetTask{"Kirk"})
+	greetGroup.Push(&GreetTask{"Rebecca"})
+	greetGroup.Push(&GreetTask{"Miles"})
+	greetGroup.Push(&GreetTask{"Tim"})
+	greetGroup.Push(&GreetTask{"Emily"})
+	greetGroup.Push(&GreetTask{"Steven"})
+	greetGroup.Push(&GreetTask{"George"})
 
 	// stop and wait for the line to finish all of the tasks
 	line.Wait()
