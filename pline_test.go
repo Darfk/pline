@@ -47,9 +47,9 @@ func TestWalk(t *testing.T) {
 	line.Start(ctx)
 
 	group1.Push(&TestPlineTask{n: 1, t: t})
-	group1.Push(&TestPlineTask{n: 1, t: t})
-	group1.Push(&TestPlineTask{n: 1, t: t})
-	group1.Push(&TestPlineTask{n: 1, t: t})
+	group1.Push(&TestPlineTask{n: 2, t: t})
+	group1.Push(&TestPlineTask{n: 3, t: t})
+	group1.Push(&TestPlineTask{n: 4, t: t})
 
 	t.Log(group1.WalkTasks(func(i int, task Task) {
 		t := task.(*TestPlineTask)
