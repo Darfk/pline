@@ -87,3 +87,35 @@ func TestCancel(t *testing.T) {
 
 	line.Finish()
 }
+
+type TestOrderTask struct {
+	a []int
+	TestPlineTask
+}
+
+func (t *TestOrderTask) Run(ctx context.Context) {
+	t.a = append(t.a, t.n)
+	t.t.Log(t.a)
+	// (&t.TestPlineTask).Run(ctx)
+}
+
+func TestOrder(t *testing.T) {
+	ctx := context.Background()
+
+	line := NewLine()
+	group1 = line.NewGroup(0)
+
+	line.Start(ctx)
+
+	var a []int
+	group1.Push(&TestOrderTask{a: a, TestPlineTask:TestPlineTask {n: 4, t: t}})
+	group1.Push(&TestOrderTask{a: a, TestPlineTask:TestPlineTask {n: 3, t: t}})
+	group1.Push(&TestOrderTask{a: a, TestPlineTask:TestPlineTask {n: 2, t: t}})
+	group1.Push(&TestOrderTask{a: a, TestPlineTask:TestPlineTask {n: 1, t: t}})
+
+	group1.Hire(1)
+
+	t.Error("not yet complete")
+
+	line.Wait()
+}
