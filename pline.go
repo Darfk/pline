@@ -190,18 +190,3 @@ func (line *Line) Finish() {
 func (line *Line) Cancel() {
 	line.cancel()
 }
-
-// Report captures information about a production line and returns a reference to a Report.
-func (line *Line) Report() (r *Report) {
-	r = &Report{
-		Workers:  make(map[int]int),
-		Idle:     make(map[int]int),
-		Tasks:    make(map[int]int),
-		Index:    make(map[int]int),
-		Waiting:  false,
-		Ignorant: false,
-	}
-
-	line.report <- r
-	return <-line.report
-}
