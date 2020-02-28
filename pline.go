@@ -138,14 +138,15 @@ func (line *Line) main() {
 	}
 }
 
-// Push a task into this group.
+// Push a task into this group, if a spare worker exists it will begin executing, otherwise it is pushed into a queue to be executed later.
 // This function returns when the new task has been added and accounted for.
 func (group *Group) Push(task Task) Result {
 	group.line.input <- input{group: group, task: task}
 	return <-group.line.result
 }
 
-// Walk through the group's tasks calling fn for each task
+// Pause the production line and walk through the group's tasks calling fn for each task
+// The callback function is called with fn(index, task)
 func (group *Group) WalkTasks(fn func(int, Task)) Result {
 	group.line.lock <- lock{group: group}
 	for i, task := range group.tasks {
@@ -156,9 +157,11 @@ func (group *Group) WalkTasks(fn func(int, Task)) Result {
 
 // Starts the production line, the production line is now able
 // to process requests to hire workers, push tasks, etc.
-func (line *Line) Start(ctx context.Context) {
+// ctx is passed into each task which is ran in this line
+func (line *Line) Start(ctx context.Context) *Line {
 	line.ctx = ctx
 	go line.main()
+	return line
 }
 
 // Hire increases the number of workers by count
@@ -185,8 +188,10 @@ func (line *Line) Finish() {
 	<-line.ctx.Done()
 }
 
-// Cancel immediately ends the production line and returns,
-// further calls to the production line will block forever.
+// Cancel cancels the context provided at the start of the production line
+// immediately ending the production line and returning.
+// Further calls to the production line will block forever,
+// therefore any tasks which push more tasks into the line will remain asleep
 func (line *Line) Cancel() {
 	line.cancel()
 }
