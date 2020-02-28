@@ -89,14 +89,13 @@ func TestCancel(t *testing.T) {
 }
 
 type TestOrderTask struct {
-	a []int
+	a *[]int
 	TestPlineTask
 }
 
 func (t *TestOrderTask) Run(ctx context.Context) {
-	t.a = append(t.a, t.n)
+	*t.a = append(*t.a, t.n)
 	t.t.Log(t.a)
-	// (&t.TestPlineTask).Run(ctx)
 }
 
 func TestOrder(t *testing.T) {
@@ -107,15 +106,27 @@ func TestOrder(t *testing.T) {
 
 	line.Start(ctx)
 
-	var a []int
-	group1.Push(&TestOrderTask{a: a, TestPlineTask:TestPlineTask {n: 4, t: t}})
-	group1.Push(&TestOrderTask{a: a, TestPlineTask:TestPlineTask {n: 3, t: t}})
-	group1.Push(&TestOrderTask{a: a, TestPlineTask:TestPlineTask {n: 2, t: t}})
-	group1.Push(&TestOrderTask{a: a, TestPlineTask:TestPlineTask {n: 1, t: t}})
+	var ns []int = []int{4, 2, 3, 1}
+
+	var a []int = make([]int, 0, len(ns))
+
+	for i, _ := range ns {
+		group1.Push(&TestOrderTask{a: &a, TestPlineTask: TestPlineTask{n: ns[i], t: t}})
+	}
 
 	group1.Hire(1)
 
-	t.Error("not yet complete")
-
 	line.Wait()
+
+	success := true
+
+	for i, _ := range ns {
+		if a[i] != ns[i] {
+			success = false
+		}
+	}
+
+	if !success {
+		t.Error("not in order")
+	}
 }
